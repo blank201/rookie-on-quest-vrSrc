@@ -8,3 +8,7 @@ like haha who could use this for piracy ever like what no huh what me no i could
 ts is ai slop coded BOIII
 because i know jack shit about java or kotlin or whatever
 if YOU know java or kotlin or android lannguage or whatever and want to fix the ai's slop, feel free to!
+
+
+
+shoutout to dmp because theyre cool
