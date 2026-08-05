@@ -207,9 +207,6 @@
     @retrofit2.http.* <methods>;
 }
 
-# Keep concrete Retrofit service implementations
--keep class com.vrhub.network.MonetizationApi { *; }
-
 # Keep all network model classes with their generic signatures
 -keep class com.vrhub.network.InitRequest { *; }
 -keep class com.vrhub.network.InitResponse { *; }

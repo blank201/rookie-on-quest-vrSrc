@@ -76,33 +76,8 @@ android {
             )
         }
 
-        // Secure Update Secret: Required for release builds
-        // LOCAL DEV: Add to local.properties -> VRHUB_UPDATE_SECRET=your_secret
-        // CI/CD: Set as GitHub repository secret (VRHUB_UPDATE_SECRET)
-        // Sources: 1. Gradle Property (-PVRHUB_UPDATE_SECRET), 2. local.properties
-        val localProperties = Properties().apply {
-            val localFile = rootProject.file("local.properties")
-            if (localFile.exists()) {
-                localFile.inputStream().use { load(it) }
-            }
-        }
-
-        val updateSecret = project.findProperty("VRHUB_UPDATE_SECRET")?.toString()
-            ?: localProperties.getProperty("VRHUB_UPDATE_SECRET")
-            ?: ""
-
         // VRP server config is now entirely user-configurable via Server Configuration
         // No more hardcoded VRP_BASE_URI or VRP_PASSWORD in the app
-
-        val isRelease = gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }
-
-        if (isRelease && updateSecret.isEmpty()) {
-            throw GradleException("VRHUB_UPDATE_SECRET project property is required for release builds. Please provide it via -PVRHUB_UPDATE_SECRET=your_secret")
-        } else if (!isRelease && updateSecret.isEmpty()) {
-            logger.warn("[update] WARNING: VRHUB_UPDATE_SECRET is empty. Update checks will fail with 403 Forbidden when connecting to secure gateway.")
-        }
-
-        buildConfigField("String", "VRHUB_UPDATE_SECRET", "\"$updateSecret\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

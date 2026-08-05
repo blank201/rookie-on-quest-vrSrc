@@ -11,19 +11,13 @@ import java.net.URI
  * @param baseUri The base URL of the VR game catalog server
  * @param password The password for extracting archives from the server
  * @param extraKeys Additional key-value pairs for extensibility (optional server-specific settings)
- * @param monetizationUrl The URL of the monetization backend (default: https://vrhub.sunshine-aio.com)
- * @param kofiVerificationToken The Ko-fi verification token for webhook authentication
  */
 data class ServerConfig(
     @SerializedName("baseUri")
     val baseUri: String,
     @SerializedName("password")
     val password: String,
-    val extraKeys: Map<String, String> = emptyMap(),
-    @SerializedName("monetizationUrl")
-    val monetizationUrl: String? = null,
-    @SerializedName("kofiVerificationToken")
-    val kofiVerificationToken: String? = null
+    val extraKeys: Map<String, String> = emptyMap()
 ) {
     /**
      * Check if this configuration is valid (has non-empty, non-whitespace baseUri and password,

@@ -299,7 +299,6 @@ jobs:
           # This prevents command injection as inputs have been validated and stored in GITHUB_ENV
           BUILD_VERSION: ${{ env.BUILD_VERSION }}
           BUILD_VERSION_CODE: ${{ env.BUILD_VERSION_CODE }}
-          VRHUB_UPDATE_SECRET: ${{ secrets.VRHUB_UPDATE_SECRET }}
         run: |
           BUILD_ARGS=()
 
@@ -310,10 +309,6 @@ jobs:
           if [ -n "$BUILD_VERSION_CODE" ]; then
             echo "Building with versionCode $BUILD_VERSION_CODE"
             BUILD_ARGS+=("-PversionCode=$BUILD_VERSION_CODE")
-          fi
-          if [ -n "$VRHUB_UPDATE_SECRET" ]; then
-            echo "Building with VRHUB_UPDATE_SECRET"
-            BUILD_ARGS+=("-PVRHUB_UPDATE_SECRET=$VRHUB_UPDATE_SECRET")
           fi
           if [ ${#BUILD_ARGS[@]} -eq 0 ]; then
             echo "Building with default version from build.gradle.kts"

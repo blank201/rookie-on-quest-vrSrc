@@ -74,7 +74,6 @@ import com.vrhub.ui.ConfigurationScreen
 import com.vrhub.ui.ConfigurationViewModel
 import com.vrhub.ui.components.CatalogUpdateBanner
 import com.vrhub.ui.theme.VRHubTheme
-import com.vrhub.ui.components.DebugMonetizationPanel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -124,7 +123,6 @@ fun MainScreenWrapper() {
     } else {
         Box(modifier = Modifier.fillMaxSize()) {
             MainScreen()
-            DebugMonetizationPanel()
         }
     }
 }
@@ -148,8 +146,6 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
     val isCatalogUpdateAvailable by viewModel.isCatalogUpdateAvailable.collectAsState()
     val catalogUpdateCount by viewModel.catalogUpdateCount.collectAsState()
     val catalogSyncProgress by viewModel.catalogSyncProgress.collectAsState()
-    val monetizationTier by viewModel.monetizationTier.collectAsState()
-    val isMonetizationValid by viewModel.isMonetizationValid.collectAsState()
 
     // Navigation state
     var currentScreen by remember { mutableStateOf("catalog") }
@@ -169,9 +165,6 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
     var showUpdateDialogState by remember { mutableStateOf<com.vrhub.network.UpdateInfo?>(null) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showConfigDialog by remember { mutableStateOf(false) }
-    var showMonetizationDialog by remember { mutableStateOf(false) }
-    var showRestoreDialog by remember { mutableStateOf(false) }
-    var lastMonetizationDialogToggle by remember { mutableStateOf(0L) }
     var gameToDelete by remember { mutableStateOf<GameItemState?>(null) }
     var taskToCancel by remember { mutableStateOf<String?>(null) }
 
@@ -380,18 +373,6 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
                     }
                 )
             }
-            showMonetizationDialog -> {
-                MonetizationEmailScreen(
-                    onDismiss = { showMonetizationDialog = false },
-                    isMonetizationValid = isMonetizationValid,
-                    monetizationTier = monetizationTier
-                )
-            }
-            showRestoreDialog -> {
-                RestorePurchaseScreen(
-                    onDismiss = { showRestoreDialog = false }
-                )
-            }
             showSettingsDialog -> {
                 SettingsDialog(
                     keepApks = keepApks,
@@ -484,38 +465,6 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
                             Spacer(Modifier.weight(1f))
                             Divider(modifier = Modifier.padding(vertical = 8.dp), color = Color.White.copy(alpha = 0.05f))
                             NavigationDrawerItem(
-                                label = { Text("Become Supporter", fontWeight = FontWeight.Bold) },
-                                selected = false,
-                                onClick = {
-                                    val now = System.currentTimeMillis()
-                                    if (now - lastMonetizationDialogToggle > 500) {
-                                        lastMonetizationDialogToggle = now
-                                        showMonetizationDialog = true
-                                    }
-                                    coroutineScope.launch { drawerState.close() }
-                                },
-                                icon = { Icon(Icons.Default.Star, null) },
-                                colors = NavigationDrawerItemDefaults.colors(
-                                    unselectedIconColor = Color(0xFFFFD700),
-                                    unselectedTextColor = Color(0xFFFFD700)
-                                ),
-                                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
-                            )
-                            NavigationDrawerItem(
-                                label = { Text("Restore Purchase", fontWeight = FontWeight.Normal) },
-                                selected = false,
-                                onClick = {
-                                    showRestoreDialog = true
-                                    coroutineScope.launch { drawerState.close() }
-                                },
-                                icon = { Icon(Icons.Default.Refresh, null) },
-                                colors = NavigationDrawerItemDefaults.colors(
-                                    unselectedIconColor = Color.Gray,
-                                    unselectedTextColor = Color.Gray
-                                ),
-                                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
-                            )
-                            NavigationDrawerItem(
                                 label = { Text("Check for Updates", fontWeight = FontWeight.Bold) },
                                 selected = false,
                                 onClick = {
@@ -585,9 +534,7 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
                                         it.status != InstallTaskStatus.BLOCKED_BY_PERMISSIONS &&
                                         it.status != InstallTaskStatus.SHELVED
                                     } || isUpdateDownloading,
-                                    permissionsMissing = !missingPermissions.isNullOrEmpty(),
-                                    monetizationTier = monetizationTier,
-                                    isMonetizationValid = isMonetizationValid
+                                    permissionsMissing = !missingPermissions.isNullOrEmpty()
                                 )
                             },
                             containerColor = Color.Black,
@@ -1144,23 +1091,9 @@ fun CustomTopBar(
     onNavigationClick: () -> Unit,
     isRefreshing: Boolean,
     isInstalling: Boolean,
-    permissionsMissing: Boolean,
-    monetizationTier: String? = null,
-    isMonetizationValid: Boolean = false
+    permissionsMissing: Boolean
 ) {
     var showSortMenu by remember { mutableStateOf(false) }
-
-    val badgeColor = when (monetizationTier) {
-        "supporter" -> Color.Black
-        "lucky" -> Color.White
-        else -> Color.White
-    }
-
-    val badgeBackgroundColor = when (monetizationTier) {
-        "supporter" -> Color(0xFFFFD700) // Gold
-        "lucky" -> Color(0xFF9C27B0) // Purple
-        else -> Color.Gray.copy(alpha = 0.3f)
-    }
 
     Surface(
         color = Color(0xFF121212),
@@ -1187,22 +1120,6 @@ fun CustomTopBar(
                     text = "VRHUB",
                     modifier = Modifier.weight(1f)
                 )
-
-                // Tier Badge (if valid)
-                if (isMonetizationValid && monetizationTier != null) {
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        color = badgeBackgroundColor
-                    ) {
-                        Text(
-                            text = monetizationTier.uppercase(),
-                            color = badgeColor,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
-                }
 
                 Box {
                     IconButton(onClick = { showSortMenu = true }) {

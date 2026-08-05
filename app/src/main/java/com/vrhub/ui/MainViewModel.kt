@@ -18,12 +18,10 @@ import com.vrhub.data.ServerConfigRepository
 import com.vrhub.data.Constants
 import com.vrhub.data.InstallUtils
 import com.vrhub.data.PermissionManager
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.ConcurrentHashMap
 import com.vrhub.data.MainRepository
 import com.vrhub.network.UpdateInfo
-import com.vrhub.network.UpdateService
 import com.vrhub.network.GitHubApiResult
 import kotlinx.coroutines.*
 import kotlinx.coroutines.NonCancellable
@@ -396,19 +394,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = MainRepository(application)
     private val configRepository = ServerConfigRepository(application)
     private val prefs = application.getSharedPreferences(com.vrhub.data.Constants.PREFS_NAME, Context.MODE_PRIVATE)
-
-    // Monetization Tier State
-    private val _monetizationTier = MutableStateFlow<String?>(null)
-    val monetizationTier: StateFlow<String?> = _monetizationTier
-
-    private val _isMonetizationValid = MutableStateFlow(false)
-    val isMonetizationValid: StateFlow<Boolean> = _isMonetizationValid
-
-    private val _monetizationError = MutableStateFlow<String?>(null)
-    val monetizationError: StateFlow<String?> = _monetizationError
-
-    // Mutex to ensure atomic updates to monetization state
-    private val monetizationMutex = Mutex()
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery
@@ -843,7 +828,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var refreshJob: Job? = null
     private var sizeFetchJob: Job? = null
 
-    private val updateService = NetworkModule.updateService
     private val githubReleaseService = NetworkModule.githubReleaseService
 
     // Use shared OkHttpClient from NetworkModule (singleton)
@@ -1071,19 +1055,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), InstallState())
 
         init {
-            // Load monetization tier from preferences
-            val (tier, isValid) = configRepository.loadMonetizationTier()
-            _monetizationTier.value = tier
-            _isMonetizationValid.value = isValid
-
-            // Validate saved email with server on startup
-            val savedEmail = configRepository.loadMonetizationEmail()
-            if (savedEmail != null) {
-                viewModelScope.launch {
-                    validateMonetizationEmail(savedEmail)
-                }
-            }
-
             // Register listener for catalog updates
             prefs.registerOnSharedPreferenceChangeListener(prefListener)
             // Perform immediate check to ensure initial state consistency (Story 4.3 Round 14 Fix)
@@ -1464,7 +1435,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun checkForAppUpdates(): Boolean {
-        // Try GitHub API first (primary), fall back to Netlify only on 404 (repo transferred/deleted)
         val githubResult = checkGitHubReleasesWithBackoff()
 
         return when (githubResult) {
@@ -1479,11 +1449,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     false
                 }
-            }
-            is GitHubApiResult.NotFound -> {
-                // 404 from GitHub = repo transferred/deleted - fall back to Netlify
-                Log.w(TAG, "GitHub repo not found (404), falling back to Netlify update service")
-                checkNetlifyUpdatesWithFallback()
             }
             is GitHubApiResult.RateLimited -> {
                 Log.w(TAG, "GitHub API rate limited (403)")
@@ -1503,6 +1468,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             is GitHubApiResult.NetworkError -> {
                 Log.w(TAG, "GitHub API network error: ${githubResult.message}")
                 _error.value = "Update check failed: Network error. Please check your internet connection and try again."
+                false
+            }
+            is GitHubApiResult.NotFound -> {
+                Log.w(TAG, "GitHub repo not found (404): ${githubResult.message}")
+                _error.value = "Update check failed: GitHub repository not found. Please update the app manually."
                 false
             }
         }
@@ -1607,110 +1577,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    /**
-     * Falls back to Netlify update service when GitHub repo is not found (404).
-     * This handles the case where the repo was transferred to a GitHub organization.
-     */
-    private suspend fun checkNetlifyUpdatesWithFallback(): Boolean {
-        var currentDelay = 1000L
-        val maxRetries = com.vrhub.data.Constants.UPDATE_MAX_RETRIES
 
-        repeat(maxRetries) { attempt ->
-            try {
-                val date = java.time.format.DateTimeFormatter.ISO_INSTANT.format(java.time.Instant.now())
-                val secret = com.vrhub.data.Constants.VRHUB_UPDATE_SECRET
-                val signature = com.vrhub.data.CryptoUtils.hmacSha256(date, secret)
-
-                val latest = updateService.checkUpdate(signature, date)
-                val currentVersion = BuildConfig.VERSION_NAME
-
-                val latestClean = latest.version.lowercase().removePrefix("v")
-                val currentClean = currentVersion.lowercase().removePrefix("v")
-
-                return if (isVersionNewer(latestClean, currentClean)) {
-                    _isUpdateDialogShowing.value = true
-                    _events.emit(MainEvent.ShowUpdatePopup(latest))
-                    true
-                } else {
-                    false
-                }
-            } catch (e: retrofit2.HttpException) {
-                // Distinguish between server errors (5xx) and client errors (4xx)
-                val isServerError = e.code() >= 500 && e.code() < 600
-                val isClientError = e.code() >= 400 && e.code() < 500 && e.code() != 403
-                // 404 is permanent - endpoint not found should not be retried
-                val isNotFoundError = e.code() == 404
-                // 408 = Request Timeout - should not retry
-                val isTimeoutError = e.code() == 408
-                // 429 = Too Many Requests - should not retry, will resolve with time
-                val isRateLimitError = e.code() == 429
-
-                if (e.code() == 403) {
-                    Log.w(TAG, "Update check forbidden (403): Possible clock skew.")
-                    _error.value = "Update check failed: Your Quest's system clock may be out of sync. This happens if the device was off for a long time. Please go to Settings -> System -> Date & Time and toggle 'Set time automatically' off and on again."
-                    return false
-                } else if (isNotFoundError) {
-                    // 404 is permanent - don't retry
-                    Log.w(TAG, "Update check endpoint not found (404).")
-                    _error.value = "Update check failed: Update service not found. Please update the app manually."
-                    return false
-                } else if (isTimeoutError) {
-                    // 408 is retryable but with longer delay - handled in final error
-                    Log.w(TAG, "Update check timeout (408).")
-                    _error.value = "Update check failed: The request timed out. Please try again later."
-                    return false
-                } else if (isRateLimitError) {
-                    // 429 is retryable but will resolve with time
-                    Log.w(TAG, "Update check rate limited (429).")
-                    _error.value = "Update check failed: Too many requests. Please wait a few minutes before trying again."
-                    return false
-                } else if (isClientError && attempt < maxRetries - 1) {
-                    Log.w(TAG, "Update check failed client error (${e.code()}), retrying in ${currentDelay}ms...")
-                    kotlinx.coroutines.delay(currentDelay)
-                    currentDelay *= 2
-                } else if (isServerError && attempt < maxRetries - 1) {
-                    Log.w(TAG, "Update check failed server error (${e.code()}), retrying in ${currentDelay}ms...")
-                    kotlinx.coroutines.delay(currentDelay)
-                    currentDelay *= 2
-                } else {
-                    Log.w(TAG, "Update check failed (${e.code()}) after $maxRetries attempts.")
-                    _error.value = if (isServerError) {
-                        "Update check failed: The update server is temporarily unavailable. Please try again later."
-                    } else if (isClientError) {
-                        "Update check failed: Request rejected by server (${e.code()}). Please try again later."
-                    } else {
-                        "Update check failed: Unable to connect to the update server. Please check your internet connection and try again."
-                    }
-                    return false
-                }
-            } catch (e: java.io.IOException) {
-                // Distinguish between transient and permanent network failures
-                // Permanent failures (connection refused, unknown host) don't warrant retries
-                val isTransientError = e.message?.let { msg ->
-                    // Transient errors that may succeed on retry
-                    msg.contains("timeout", ignoreCase = true) ||
-                    msg.contains("reset", ignoreCase = true) ||
-                    msg.contains("unreachable", ignoreCase = true) ||
-                    msg.contains("temporarily", ignoreCase = true)
-                } ?: false
-
-                if (isTransientError && attempt < maxRetries - 1) {
-                    Log.w(TAG, "Update check transient network error (${e.message}), retrying in ${currentDelay}ms...")
-                    kotlinx.coroutines.delay(currentDelay)
-                    currentDelay *= 2
-                } else {
-                    // Permanent error (e.g., connection refused) or retries exhausted
-                    Log.w(TAG, "Update check failed after $maxRetries attempts: ${e.message}")
-                    _error.value = "Update check failed: Network error. Please check your internet connection and try again."
-                    return false
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Unexpected error checking for updates: ${e.message}")
-                return false
-            }
-        }
-        return false
-    }
 
     /**
      * Compares two version strings to determine if the latest version is newer.
@@ -1818,26 +1685,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 val initialDownloaded = if (targetFile.exists()) targetFile.length() else 0L
 
-                // Resolve downloadUrl: support absolute URLs, protocol-relative URLs, and relative paths
-                // - Absolute URLs (http://, https://): used as-is
-                // - Protocol-relative URLs (//example.com): resolved to https://
-                // - Relative paths (/path): resolved against SECURE_UPDATE_BASE_URL
-                val resolvedDownloadUrl = when {
-                    updateInfo.downloadUrl.startsWith("http://") ||
-                    updateInfo.downloadUrl.startsWith("https://") -> {
-                        // Absolute URL - use as-is
-                        updateInfo.downloadUrl
-                    }
-                    updateInfo.downloadUrl.startsWith("//") -> {
-                        // Protocol-relative URL (e.g., "//sunshine-aio.com/path") - add https:
-                        "https:" + updateInfo.downloadUrl
-                    }
-                    else -> {
-                        // Relative path - resolve against base URL (strip trailing slash from base)
-                        val baseUrl = com.vrhub.data.Constants.SECURE_UPDATE_BASE_URL.trimEnd('/')
-                        baseUrl + updateInfo.downloadUrl
-                    }
-                }
+                val resolvedDownloadUrl = updateInfo.downloadUrl
                 Log.d(TAG, "Resolved download URL: $resolvedDownloadUrl")
 
                 val requestBuilder = Request.Builder().url(resolvedDownloadUrl)
@@ -1954,71 +1802,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 // Check if a catalog update was found in background
                 checkCatalogUpdate()
-            }
-        }
-    }
-
-    /**
-     * Update the monetization tier and persist it.
-     * Called after successful /validate API call.
-     * Uses mutex to ensure atomic StateFlow updates.
-     */
-    fun updateMonetizationTier(tier: String?, isValid: Boolean) {
-        viewModelScope.launch {
-            monetizationMutex.withLock {
-                _monetizationTier.value = tier
-                _isMonetizationValid.value = isValid
-                configRepository.saveMonetizationTier(tier, isValid)
-            }
-        }
-    }
-
-    /**
-     * Validate a saved email with the monetization server.
-     * Updates tier state if a valid license is found.
-     * Uses mutex to ensure atomic StateFlow updates.
-     */
-    suspend fun validateMonetizationEmail(email: String) {
-        _monetizationError.value = null
-        try {
-            val response = NetworkModule.monetizationApi.validateEmail(email)
-            if (response.isSuccessful) {
-                val body = response.body()
-                if (body != null && body.valid && body.tier != null) {
-                    // tier: null with valid: true is treated as invalid (user exists but no active tier)
-                    monetizationMutex.withLock {
-                        _monetizationTier.value = body.tier
-                        _isMonetizationValid.value = true
-                        configRepository.saveMonetizationTier(body.tier, true)
-                    }
-                    Log.d(TAG, "Monetization: Restored tier ${body.tier} for $email")
-                } else {
-                    monetizationMutex.withLock {
-                        _monetizationTier.value = null
-                        _isMonetizationValid.value = false
-                        configRepository.saveMonetizationTier(null, false)
-                    }
-                    Log.d(TAG, "Monetization: No valid license for $email")
-                }
-            } else {
-                _monetizationError.value = "Validation failed (code ${response.code()})"
-                Log.w(TAG, "Monetization: /validate returned ${response.code()} for $email")
-            }
-        } catch (e: Exception) {
-            _monetizationError.value = "Network error: ${e.message}"
-            Log.e(TAG, "Monetization: Failed to validate email $email", e)
-        }
-    }
-
-    /**
-     * Retry monetization validation for the saved email.
-     * Exposed for user-triggered retry from UI.
-     */
-    fun retryMonetizationValidation() {
-        val savedEmail = configRepository.loadMonetizationEmail()
-        if (savedEmail != null) {
-            viewModelScope.launch {
-                validateMonetizationEmail(savedEmail)
             }
         }
     }

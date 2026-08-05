@@ -1,8 +1,6 @@
 package com.vrhub.data
 
 import com.vrhub.network.GitHubReleaseService
-import com.vrhub.network.MonetizationApi
-import com.vrhub.network.UpdateService
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Semaphore
@@ -56,11 +54,6 @@ object Constants {
     const val USER_AGENT = "rclone/v1.72.1"
 
     /**
-     * Base URL for secure update gateway
-     */
-    const val SECURE_UPDATE_BASE_URL = "https://www.sunshine-aio.com/"
-
-    /**
      * GitHub API base URL for releases
      */
     const val GITHUB_API_BASE_URL = "https://api.github.com/"
@@ -80,12 +73,6 @@ object Constants {
      * Actual URL is constructed from owner/repo: https://api.github.com/repos/{owner}/{repo}/releases/latest
      */
     const val GITHUB_RELEASES_URL_PATTERN = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
-
-    /**
-     * Secret key for secure update signature (HMAC-SHA256).
-     * Injected at build time via build.gradle.kts.
-     */
-    val VRHUB_UPDATE_SECRET = com.vrhub.BuildConfig.VRHUB_UPDATE_SECRET
 
     /**
      * HTTP connection timeout in seconds
@@ -295,27 +282,6 @@ object NetworkModule {
     }
 
     /**
-     * Dedicated Retrofit instance for secure update gateway.
-     */
-    val secureUpdateRetrofit: Retrofit by lazy {
-        Retrofit.Builder()
-            .baseUrl(Constants.SECURE_UPDATE_BASE_URL)
-            .client(okHttpClient.newBuilder()
-                .connectTimeout(Constants.UPDATE_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                .readTimeout(Constants.UPDATE_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                .build())
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-    }
-
-    /**
-     * Service for secure application updates.
-     */
-    val updateService: UpdateService by lazy {
-        secureUpdateRetrofit.create(UpdateService::class.java)
-    }
-
-    /**
      * Retrofit instance for GitHub API (primary update source).
      */
     val githubApiRetrofit: Retrofit by lazy {
@@ -336,35 +302,6 @@ object NetworkModule {
         githubApiRetrofit.create(GitHubReleaseService::class.java)
     }
 
-    /**
-     * Base URL for VRHub monetization backend.
-     * Fixed: https://vrhub.sunshine-aio.com — do not change without server deployment.
-     * Note: ServerConfig.monetizationUrl is reserved for future per-user configuration
-     * but is not currently read by NetworkModule.
-     */
-    const val MONETIZATION_BASE_URL = "https://vrhub.sunshine-aio.com"
-
-    /**
-     * Retrofit instance for monetization API.
-     * Uses default OkHttpClient timeouts.
-     */
-    val monetizationRetrofit: Retrofit by lazy {
-        Retrofit.Builder()
-            .baseUrl(MONETIZATION_BASE_URL)
-            .client(okHttpClient.newBuilder()
-                .connectTimeout(Constants.HTTP_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                .readTimeout(Constants.HTTP_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                .build())
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-    }
-
-    /**
-     * Service for monetization API calls.
-     */
-    val monetizationApi: MonetizationApi by lazy {
-        monetizationRetrofit.create(MonetizationApi::class.java)
-    }
 }
 
 /**
@@ -430,21 +367,6 @@ object CryptoUtils {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    /**
-     * Computes HMAC-SHA256 hash of a string using a secret key.
-     * Used for secure update gateway authentication.
-     *
-     * @param input The string to sign (typically a timestamp)
-     * @param secret The secret key
-     * @return Lowercase hexadecimal HMAC-SHA256 signature
-     */
-    fun hmacSha256(input: String, secret: String): String {
-        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
-        val secretKey = javax.crypto.spec.SecretKeySpec(secret.toByteArray(Charsets.UTF_8), "HmacSHA256")
-        mac.init(secretKey)
-        val bytes = mac.doFinal(input.toByteArray(Charsets.UTF_8))
-        return bytes.joinToString("") { "%02x".format(it) }
-    }
 }
 
 /**
